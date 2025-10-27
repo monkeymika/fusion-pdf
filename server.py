@@ -2,6 +2,8 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import StreamingResponse
 from pypdf import PdfReader, PdfWriter
 import io, requests
+import uvicorn
+import os
 
 app = FastAPI(title="Fusion PDF + Signets")
 
@@ -87,3 +89,7 @@ def fusion_pdf(payload: dict):
 
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
+
+if __name__ == "__main__":
+    port = int(os.environ.get("PORT", 8080))
+    uvicorn.run(app, host="0.0.0.0", port=port)
