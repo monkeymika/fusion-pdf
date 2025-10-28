@@ -124,6 +124,11 @@ def fusion_pdf(payload: dict):
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
+@app.get("/")
+def health():
+    return {"ok": True, "service": "fusion-pdf"}
+
+
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8080))
     uvicorn.run(app, host="0.0.0.0", port=port)
