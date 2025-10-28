@@ -4,8 +4,8 @@ import tempfile
 import requests
 from urllib.parse import urlsplit
 
-from fastapi import FastAPI, HTTPException
-from fastapi.responses import StreamingResponse
+from fastapi import FastAPI, HTTPException, Response
+from fastapi.responses import StreamingResponse  # (non utilisé mais ok si tu le gardes)
 from pypdf import PdfReader, PdfWriter
 
 from requests.adapters import HTTPAdapter
@@ -188,18 +188,23 @@ def fusion_pdf(payload: dict):
                     for it in items:
                         writer.add_outline_item(f"• {it['titre']}", it["page"], parent=cat_item)
 
-            # Écrire en mémoire et renvoyer (avec Content-Length)
+            # ========= Écriture + retour PLEIN EN MÉMOIRE (avec Content-Length) =========
             buf = io.BytesIO()
             writer.write(buf)
-            size = buf.getbuffer().nbytes   # taille exacte en octets
-            buf.seek(0)
 
-            return StreamingResponse(
-                buf,
+            # Sanity check : on relit le PDF généré
+            try:
+                _ = PdfReader(io.BytesIO(buf.getvalue()))
+            except Exception as e:
+                raise HTTPException(status_code=500, detail=f"PDF généré invalide: {e}")
+
+            pdf_bytes = buf.getvalue()
+            return Response(
+                content=pdf_bytes,
                 media_type="application/pdf",
                 headers={
                     "Content-Disposition": 'attachment; filename="catalogues_fusionnes.pdf"',
-                    "Content-Length": str(size)
+                    "Content-Length": str(len(pdf_bytes))
                 }
             )
 
