@@ -124,9 +124,28 @@ def fusion_pdf(payload: dict):
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
+# 1) Endpoint santé (réveil + test rapide depuis le navigateur)
 @app.get("/")
 def health():
     return {"ok": True, "service": "fusion-pdf"}
+
+# 2) Logs des requêtes (on voit chaque appel entrer/sortir)
+@app.middleware("http")
+async def log_requests(request, call_next):
+    try:
+        print(f"[req] {request.method} {request.url.path}", flush=True)
+        response = await call_next(request)
+        print(f"[res] {request.method} {request.url.path} -> {response.status_code}", flush=True)
+        return response
+    except Exception as e:
+        print(f"[err] {request.method} {request.url.path} -> {e}", flush=True)
+        raise
+
+# 3) GET de probe pour /fusion-pdf (juste pour vérifier le routage)
+@app.get("/fusion-pdf")
+def fusion_pdf_get_probe():
+    return {"ok": True, "hint": "Use POST /fusion-pdf with JSON body"}
+
 
 
 if __name__ == "__main__":
