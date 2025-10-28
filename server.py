@@ -1,21 +1,19 @@
 import os
+import io
 import tempfile
 from urllib.parse import urlsplit
 
 import requests
 from fastapi import FastAPI, HTTPException, Response
-from fastapi.responses import FileResponse
-from starlette.background import BackgroundTask
-
+from fastapi.responses import StreamingResponse
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
-
-import pikepdf  # qpdf backend: streaming & low-RAM
+from pypdf import PdfReader, PdfWriter
 import uvicorn
 
-app = FastAPI(title="Fusion PDF + Signets (pikepdf)")
+app = FastAPI(title="Fusion PDF (pypdf)")
 
-# ---------- Téléchargement robuste vers fichier disque ----------
+# --------- Download robuste vers fichier disque ----------
 def download_pdf_to_tempfile(url: str, timeout: int = 600, chunk_size: int = 1024 * 1024) -> str:
     origin = f"{urlsplit(url).scheme}://{urlsplit(url).netloc}"
     headers = {
@@ -23,7 +21,6 @@ def download_pdf_to_tempfile(url: str, timeout: int = 600, chunk_size: int = 102
         "Accept": "application/pdf,*/*;q=0.8",
         "Referer": origin,
     }
-
     retry = Retry(
         total=5,
         backoff_factor=1.5,
@@ -73,7 +70,7 @@ def download_pdf_to_tempfile(url: str, timeout: int = 600, chunk_size: int = 102
         print(f"[fetch] ERROR {url} -> {e}", flush=True)
         raise HTTPException(status_code=400, detail=f"Erreur téléchargement PDF: {e}")
 
-# ---------- Logs ----------
+# --------- Logs ----------
 @app.middleware("http")
 async def log_requests(request, call_next):
     try:
@@ -85,7 +82,7 @@ async def log_requests(request, call_next):
         print(f"[err] {request.method} {request.url.path} -> {e}", flush=True)
         raise
 
-# ---------- Santé ----------
+# --------- Santé ----------
 @app.get("/")
 def health():
     return {"ok": True, "service": "fusion-pdf"}
@@ -102,7 +99,7 @@ def probe_get():
 def probe_head():
     return Response(status_code=200)
 
-# ---------- Fusion (pikepdf / qpdf) ----------
+# --------- Fusion (pypdf) ----------
 @app.post("/fusion-pdf")
 def fusion_pdf(payload: dict):
     """
@@ -110,7 +107,7 @@ def fusion_pdf(payload: dict):
     {
       "catalogues": [
         {"fournisseur":"CEDAM","url":"https://.../cedam.pdf","chapitres":[]},
-        {"fournisseur":"Elios Ceramica","url":"https://.../elios.pdf","chapitres":[]}
+        {"fournisseur":"Elios","url":"https://.../elios.pdf","chapitres":[]}
       ],
       "titre_global": "Test Fusion"
     }
@@ -122,84 +119,73 @@ def fusion_pdf(payload: dict):
 
         titre_global = payload.get("titre_global", "Catalogue fusionné")
 
-        # 1) Télécharger tous les PDF sur disque
+        # 1) Télécharger sur disque
         temp_paths = []
-        meta = []  # (fournisseur, path, pages_count)
+        meta = []  # (fournisseur, path, nb_pages)
         try:
             for c in catalogues:
                 fournisseur = c["fournisseur"]
                 url = c["url"]
                 print(f"[merge] + {fournisseur} | {url}", flush=True)
                 path = download_pdf_to_tempfile(url)
-                # Compter les pages (léger avec pikepdf)
-                with pikepdf.open(path) as src:
-                    nb = len(src.pages)
-                temp_paths.append(path)
+                reader = PdfReader(path)
+                nb = len(reader.pages)
                 meta.append((fournisseur, path, nb))
+                temp_paths.append(path)
 
-            # 2) Concaténer en streaming
-            tmp_out = tempfile.NamedTemporaryFile(delete=False, suffix=".pdf")
-            out_path = tmp_out.name
-            tmp_out.close()
-
+            # 2) Construire le PDF sortie
+            writer = PdfWriter()
             page_offset = 0
-            supplier_toc = []  # (title, offset)
+            supplier_bookmarks = []
 
-            # Créer un doc vide et y copier les pages
-            with pikepdf.Pdf.new() as out:
-                for fournisseur, path, nb in meta:
-                    with pikepdf.open(path) as src:
-                        out.pages.extend(src.pages)  # streaming, low-RAM
-                    supplier_toc.append((f"📁 {fournisseur}", page_offset))
-                    print(f"[merge] {fournisseur} pages={nb} offset={page_offset}", flush=True)
-                    page_offset += nb
+            for fournisseur, path, nb in meta:
+                reader = PdfReader(path)
+                for p in range(nb):
+                    writer.add_page(reader.pages[p])
+                supplier_bookmarks.append((f"📁 {fournisseur}", page_offset))
+                print(f"[merge] {fournisseur} pages={nb} offset={page_offset}", flush=True)
+                page_offset += nb
 
-                # 3) Signets fournisseurs (chapitres simples)
-                ol = out.open_outline()
-                root = ol.root  # racine
-                # Signet racine
-                # (pikepdf ne crée pas un item "racine" cliquable, on ajoute directement des enfants)
-                for title, offset in supplier_toc:
-                    try:
-                        root.add_child(title, page=out.pages[offset])
-                    except Exception as e:
-                        print(f"[outline] skip {title}: {e}", flush=True)
+            # signets fournisseurs
+            root = writer.add_outline_item(titre_global, 0)
+            for title, offset in supplier_bookmarks:
+                try:
+                    writer.add_outline_item(title, offset, parent=root)
+                except Exception as e:
+                    print(f"[outline] skip {title}: {e}", flush=True)
 
-                out.save(out_path)
+            # 3) écrire en mémoire + Content-Length
+            buf = io.BytesIO()
+            writer.write(buf)
+            size = buf.getbuffer().nbytes
+            buf.seek(0)
 
-            # Sanity check d’ouverture
-            try:
-                with pikepdf.open(out_path):
+            # nettoyage fichiers sources
+            for p in temp_paths:
+                try:
+                    if os.path.exists(p):
+                        os.remove(p)
+                except:
                     pass
-            except Exception as e:
-                raise HTTPException(status_code=500, detail=f"PDF généré invalide: {e}")
 
-            # 4) Retourner le fichier et nettoyer après envoi
-            def cleanup(paths):
-                for p in paths:
-                    try:
-                        if os.path.exists(p):
-                            os.remove(p)
-                    except:
-                        pass
-
-            bg = BackgroundTask(cleanup, temp_paths + [out_path])
-            return FileResponse(
-                path=out_path,
+            return StreamingResponse(
+                buf,
                 media_type="application/pdf",
-                filename="catalogues_fusionnes.pdf",
-                background=bg,
+                headers={
+                    "Content-Disposition": 'attachment; filename="catalogues_fusionnes.pdf"',
+                    "Content-Length": str(size)
+                }
             )
 
-        finally:
-            # Si une erreur survient avant FileResponse, on nettoie
-            if temp_paths:
-                for p in temp_paths:
-                    try:
-                        if os.path.exists(p):
-                            os.remove(p)
-                    except:
-                        pass
+        except:
+            # en cas d'erreur → nettoyage
+            for p in temp_paths:
+                try:
+                    if os.path.exists(p):
+                        os.remove(p)
+                except:
+                    pass
+            raise
 
     except HTTPException:
         raise
