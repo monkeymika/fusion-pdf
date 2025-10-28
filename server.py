@@ -17,7 +17,7 @@ app = FastAPI(title="Fusion PDF + Signets (Streaming)")
 
 
 # ========= Téléchargement robuste (stream + headers + retries) =========
-def fetch_pdf_stream_to_file(url: str, timeout: int = 300, chunk_size: int = 512 * 1024):
+def fetch_pdf_stream_to_file(url: str, timeout: int = 600, chunk_size: int = 1024 * 1024):
     """
     Télécharge un PDF en streaming dans un fichier temporaire.
     - Headers 'navigateur' + Referer (souvent requis par les flipbooks)
