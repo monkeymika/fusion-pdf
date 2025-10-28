@@ -1,4 +1,4 @@
 fastapi==0.115.0
 uvicorn[standard]==0.30.6
 requests==2.32.3
-pikepdf==8.5.4
+pikepdf==8.9.0
