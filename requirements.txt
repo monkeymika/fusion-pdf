@@ -1,4 +1,4 @@
-fastapi
-uvicorn[standard]
-pypdf==4.3.1
-requests
+fastapi==0.115.0
+uvicorn[standard]==0.30.6
+requests==2.32.3
+pikepdf==8.5.4
