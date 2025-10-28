@@ -188,14 +188,19 @@ def fusion_pdf(payload: dict):
                     for it in items:
                         writer.add_outline_item(f"• {it['titre']}", it["page"], parent=cat_item)
 
-            # Écrire en mémoire et renvoyer
+            # Écrire en mémoire et renvoyer (avec Content-Length)
             buf = io.BytesIO()
             writer.write(buf)
+            size = buf.getbuffer().nbytes   # taille exacte en octets
             buf.seek(0)
+
             return StreamingResponse(
                 buf,
                 media_type="application/pdf",
-                headers={"Content-Disposition": 'attachment; filename="catalogues_fusionnes.pdf"'}
+                headers={
+                    "Content-Disposition": 'attachment; filename="catalogues_fusionnes.pdf"',
+                    "Content-Length": str(size)
+                }
             )
 
         finally:
